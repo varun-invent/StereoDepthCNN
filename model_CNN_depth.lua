@@ -40,7 +40,7 @@ nInputPlanes = size_image_input[1]
 -- Patch creation -- 
 
 -- Image size = 190x1100
--- patch Size = 11x11
+-- patch Size = 41x41
 
 stride = 41
 
@@ -71,57 +71,64 @@ end
 print('Patches created')
 
 print('Patch1 size ',patch.patch_l[1]:size())
-image.display(patch.patch_l[1])
+--image.display(patch.patch_l[1])
 
 
------- Convolution -----
+------ Convolution ----- Training
 --create a module:  nn.Sequence(nn.input -->  nn.Parallel(CONV1-CONV1,CONV2-CONV2)) --> nn.JoinTable() -- >> FC--> Loss
 
+-- Image size = 41x41
 -- patchsize = 11x11
 -- stride = 1
--- pooling_stride = poolsize x poolsize
-nStates = {64,64,128} -- hidden neurons for each layer (here 3 hidden layers) conv1,conv2,PreOutput>>>output
-filtsize = 11 -- kerner/patch size
-poolsize = 4
+-- pooling_stride = poolsize x poolsize00 ==
+
+
+nstates = {300,200,400} -- hidden neurons for each layer (here 3 hidden layers) conv1,conv2,PreOutput>>>output
+filtsize = 7 -- kerner/patch size
+poolsize = 2
 model = nn.Sequential()
 for i = 1,2 do
-	local parallel = nn.ParallelTable()
-	local subModel = nn.Sequential()
+	parallel = nn.ParallelTable()
+	subModel = nn.Sequential()
 	-- stage 1 : filter bank -> squashing -> L2 pooling -> normalization
 	
-	subModel:add(nn.SpatialConvolutionMM(nInputPlanes,nStates[1], filtsize, filtsize))
+	subModel:add(nn.SpatialConvolutionMM(nInputPlanes,nstates[1], filtsize, filtsize))
 	subModel:add(nn.ReLU())
     subModel:add(nn.SpatialMaxPooling(poolsize,poolsize,poolsize,poolsize))
 	
 	-- stage 2 : filter bank -> squashing -> L2 pooling -> normalization
     
-    subModel:add(nn.SpatialConvolutionMM(nstates[1], nstates[2], filtsize, filtsize))
-    subModel:add(nn.ReLU())
-    subModel:add(nn.SpatialMaxPooling(poolsize,poolsize,poolsize,poolsize))
+   -- subModel:add(nn.SpatialConvolutionMM(nstates[1], nstates[2], filtsize, filtsize))
+   -- subModel:add(nn.ReLU())
+   -- subModel:add(nn.SpatialMaxPooling(poolsize,poolsize,poolsize,poolsize))
 
     --stage 3: Unrolling into a vector
 
-    subModel:add(nn.view())-----------------------I am here --- Decide what will be the size of final layer
- ------------------------------------------------
- 	---Add dropout to subModel
- 	---Add Linear to subModel
- 	---Add Softmax to subModel
- 	---
-    -------
+	subModel:add(nn.View(nstates[2]*5*5))
+	--subModel:add(nn.Dropout(0.5))
+	--subModel:add(nn.Linear(nstates[2]*5*5, nstates[3]))
+	subModel:add(nn.ReLU())
+	subModel:add(nn.Linear(nstates[3], math.floor(nOutputs/2)))
+	subModel:add(nn.Sigmoid())
+
     parallel:add(subModel)
 end
 
 model:add(parallel)
-model:add(nn.JoinTable(1))
---
----Add dropout to Model -----------------------
----Add Linear to Model		This is FC layer
----Add Softmax to Model -----------------------
+model:add(nn.JoinTable(1))   -- Concat two tensors of two images
+model:add(nn.Linear(2*math.floor(nOutputs/2)*5*5, nstates[3]))
+model:add(nn.ReLU())
+model:add(nn.Dropout(0.5))
+model:add(nn.Linear(nstates[3], nOutputs))
+model:add(nn.Sigmoid())
 
 ---Add Loss
+criterion = nn.MSECriterion()
 
 -- Remove the spatial normalization of depth map and just normalize wrt constant 255
 
+
+output =  model:forward(patch.patch_l[1])
 
 
     
