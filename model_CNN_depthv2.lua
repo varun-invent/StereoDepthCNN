@@ -18,16 +18,16 @@ require 'optim'
 -- data is in the form of a table which contains three subtables : image_gt_depth,image_left, image_right
 
 
-loaded = torch.load('kitti_stereo_dataset_190_normalized_yuv.dat')
+loaded = torch.load('kitti_stereo_dataset_190_normalized_yuv_v4.dat')
 
 print('Data loaded',loaded)
 trainData = {
-	std_right = loaded.std_right,
-	std_left = loaded.std_left,
-	mean_right = loaded.mean_right,
-	mean_left = loaded.mean_left,
-	--mean_depth = loaded.mean_depth,
-	--std_depth = loaded.std_depth,
+	--std_right = loaded.std_right,
+	-- std_left = loaded.std_left,
+	-- mean_right = loaded.mean_right,
+	-- mean_left = loaded.mean_left,
+	-- mean_depth = loaded.mean_depth,
+	-- std_depth = loaded.std_depth,
 	image_gt_depth = loaded.trainData.image_gt_depth:float(),
 	image_left = loaded.trainData.image_left:float(),
 	image_right = loaded.trainData.image_right:float()} 
@@ -74,8 +74,8 @@ end
 -- patch Size = 41x41
 
 --stride = 41
-stride = 10
-patch_size = 41
+stride = 60
+patch_size = 96
 errors = {}
 --nPatches =   (size_image_input[2] - patch_size +1) * (size_image_input[3] - patch_size +1) * nImagePairs 
 
@@ -117,13 +117,13 @@ print('Patch1 size ',patch.patch_l[1]:size())
 -- pooling_stride = poolsize x poolsize00 ==
 
 nOutputs = (#patch.patch_d)[3]*(#patch.patch_d)[4]
-nstates = {300,200,400} -- hidden neurons for each layer (here 3 hidden layers) conv1,conv2,PreOutput>>>output
+nstates = {400,350,400,300} -- hidden neurons for each layer (here 3 hidden layers) conv1,conv2,PreOutput>>>output
 filtsize = 7 -- kerner/patch size
 poolsize = 2
 
 model = nn.Sequential()
 parallel = nn.ParallelTable()
-for i = 1,2 do
+for i = 1,2 do                                     -----Date 13 July 2015, removed the sigmoids and added tanh,increased momentum from 0.01 to 0.03, Batch size 250 -> 450
 	
 	subModel = nn.Sequential()
 	-- stage 1 : filter bank -> squashing -> L2 pooling -> normalization
@@ -138,25 +138,39 @@ for i = 1,2 do
    	subModel:add(nn.ReLU())
     subModel:add(nn.SpatialMaxPooling(poolsize,poolsize,poolsize,poolsize))
 
-    --stage 3: Unrolling into a vector
+  -- stage 2 : filter bank -> squashing -> L2 pooling -> normalization
+    
+    subModel:add(nn.SpatialConvolutionMM(nstates[2], nstates[3], filtsize, filtsize))
+    subModel:add(nn.ReLU())
+    --subModel:add(nn.SpatialMaxPooling(poolsize,poolsize,poolsize,poolsize))  
 
-	subModel:add(nn.View(nstates[2]*5*5))
-	subModel:add(nn.Dropout(0.5))
-	subModel:add(nn.Linear(nstates[2]*5*5, nstates[3]))
-	subModel:add(nn.ReLU())
-	subModel:add(nn.Linear(nstates[3], math.floor(nOutputs/2)))
-	subModel:add(nn.Sigmoid())
+  -- stage 2 : filter bank -> squashing -> L2 pooling -> normalization
+    
+    --subModel:add(nn.SpatialConvolutionMM(nstates[3], nstates[4], filtsize, filtsize))
+    --subModel:add(nn.ReLU())
+    --subModel:add(nn.SpatialMaxPooling(poolsize,poolsize,poolsize,poolsize))
+
+  --stage 3: Unrolling into a vector
+
+  	subModel:add(nn.View(nstates[3]*13*13))
+  	subModel:add(nn.Dropout(0.5))
+  	subModel:add(nn.Linear(nstates[3]*13*13, nstates[4]))
+  	subModel:add(nn.ReLU())
+  	subModel:add(nn.Linear(nstates[4], math.floor(nOutputs/2)))
+  	subModel:add(nn.Tanh())
+    subModel:add(nn.Linear(math.floor(nOutputs/2),math.floor(nOutputs/2)))  
 
     parallel:add(subModel)
 end
 
-model:add(parallel)
-model:add(nn.JoinTable(1))   -- Concat two tensors of two images
-model:add(nn.Linear(2*math.floor(nOutputs/2), nstates[3]))
-model:add(nn.ReLU())
-model:add(nn.Dropout(0.5))
-model:add(nn.Linear(nstates[3], nOutputs))
-model:add(nn.Sigmoid())
+  model:add(parallel)
+  model:add(nn.JoinTable(1))   -- Concat two tensors of two images
+  model:add(nn.Linear(2*math.floor(nOutputs/2), nstates[4]))
+  model:add(nn.ReLU())
+  model:add(nn.Dropout(0.5))
+  model:add(nn.Linear(nstates[4], nOutputs))
+  model:add(nn.Tanh())
+  model:add(nn.Linear(nOutputs, nOutputs))
 
 ---Add Loss
 criterion = nn.MSECriterion()
@@ -164,18 +178,18 @@ criterion = nn.MSECriterion()
 
 print('Calculating sample output')
 output =  model:forward({patch.patch_l[1],patch.patch_r[1]})   -- Just to test if the model I have made is working fine
-
+print(#output)
 
 
 print('Starting to train')    
 
 -- Some options
 
-opt = {batchSize =250 ,type = 'double'}    
+opt = {batchSize =300 ,type = 'double'}    
 --- Train
 
 optimState = {
-      learningRate = 0.2,
+      learningRate = 0.1,
       weightDecay = 0.01,
       momentum = 0.01,
       learningRateDecay = 1e-7
@@ -283,17 +297,19 @@ print("\n==> time to learn 1 sample = " .. (time*1000) .. 'ms')
 
 -- Saving the model
 model_and_normalizers = {
-model = model,
-std_right = trainData.std_right,
-std_left = trainData.std_left,
-mean_right = trainData.mean_right,
-mean_left = trainData.mean_left}
+model = model}
+-- std_right = trainData.std_right,
+-- std_left = trainData.std_left,
+-- std_depth = trainData.std_depth,
+-- mean_right = trainData.mean_right,
+-- mean_left = trainData.mean_left,
+-- mean_depth = trainData.mean_depth}
 
-torch.save('depth_model_190_samplesv2.dat',model_and_normalizers)
+torch.save('depth_model_190_samplesv4.dat',model_and_normalizers)
 
 
 print('Model saved')
 
-torch.save('errors.dat',errors)
+torch.save('errors_v4.dat',errors)
 
 print('Errors saved')
